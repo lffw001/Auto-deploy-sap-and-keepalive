@@ -1,7 +1,7 @@
 name: 自动部署 SAP
 
 on:
-  workflow_dispatch:  # 只允许手动触发
+  workflow_dispatch:
     inputs:
       environment:
         description: '选择部署环境'
@@ -17,15 +17,15 @@ on:
         default: 'SG'
         type: choice
         options:
-          - SG  # 新加坡
-          - US  # 美国
-      app_name:
-        description: '应用名称（可选，留空则自动生成）'
-        required: false
-        default: ''
+          - SG
+          - US
+      is_direct_connect:
+        description: '启用直连？理论上速度更快'
+        required: true
+        type: boolean
+        default: false
 
 env:
-  DOCKER_IMAGE: ghcr.io/eooce/nodejs:main
   MEMORY: 512M
 
 jobs:
@@ -34,19 +34,28 @@ jobs:
     environment: ${{ github.event.inputs.environment }}
 
     steps:
-    - name: Checkout code
+    - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: Install CF CLI
+    - name: 安装 CF CLI
       run: |
         wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
         echo "deb https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
         sudo apt-get update
         sudo apt-get install -y cf8-cli
 
-    - name: Determine CF API endpoint and app name
+    - name: 根据输入选择Docker镜像
       run: |
-        # 设置API端点
+        if [ "${{ github.event.inputs.is_direct_connect }}" = "true" ]; then
+          echo "已选择“直连镜像”，使用 ghcr.io/eooce/ws:latest"
+          echo "DOCKER_IMAGE=ghcr.io/eooce/ws:latest" >> $GITHUB_ENV
+        else
+          echo "未选择“直连镜像”，使用默认的 ghcr.io/eooce/nodejs:main"
+          echo "DOCKER_IMAGE=ghcr.io/eooce/nodejs:main" >> $GITHUB_ENV
+        fi
+
+    - name: 生成应用名称并设置API端点
+      run: |
         if [ "${{ github.event.inputs.region }}" = "SG" ]; then
           echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
           RANDOM_STR=$(head /dev/urandom | tr -dc 'a-z' | head -c 6)
@@ -57,124 +66,124 @@ jobs:
           DEFAULT_APP_NAME="us$RANDOM_STR"
         fi
         
-        # 设置应用名称（如果用户提供了则使用，否则使用默认）
-        if [ -n "${{ github.event.inputs.app_name }}" ]; then
-          echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
-        else
-          echo "APP_NAME=$DEFAULT_APP_NAME" >> $GITHUB_ENV
-        fi
-        
-        echo "使用API端点: $CF_API"
-        echo "应用名称: $APP_NAME"
+        echo "APP_NAME=$DEFAULT_APP_NAME" >> $GITHUB_ENV
+        echo "将使用API端点: ${{ env.CF_API }}"
+        echo "已自动生成应用名称: $DEFAULT_APP_NAME"
 
-    - name: Login to Cloud Foundry and auto-detect org/space
+    - name: 登录并自动选择组织和空间
       run: |
-        # 首先进行基础登录
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
         
-        echo "自动检测可用的组织和空间..."
+        echo "登录成功，开始自动检测组织和空间..."
         
-        # 获取所有可用的组织
-        cf orgs > orgs.txt
-        echo "可用组织:"
-        cat orgs.txt
-        
-        # 自动选择第一个可用的组织（跳过标题行）
-        SELECTED_ORG=$(cf orgs | grep -v "^name$" | grep -v "^Getting orgs" | grep -v "^$" | head -n 1 | awk '{print $1}')
+        SELECTED_ORG=$(cf orgs | awk 'NR>3 {print $1; exit}')
         
         if [ -z "$SELECTED_ORG" ]; then
-          echo "错误: 未找到可用的组织"
+          echo "错误：未能在您的账户下找到任何可用的组织。"
+          echo "请检查您的SAP BTP账户是否已正确设置并启用Cloud Foundry运行时。"
           exit 1
         fi
         
-        echo "选择组织: $SELECTED_ORG"
+        echo "已自动选择组织: $SELECTED_ORG"
         cf target -o "$SELECTED_ORG"
         
-        # 获取该组织下的所有空间
-        cf spaces > spaces.txt
-        echo "可用空间:"
-        cat spaces.txt
-        
-        # 自动选择第一个可用的空间
-        SELECTED_SPACE=$(cf spaces | grep -v "^name$" | grep -v "^Getting spaces" | grep -v "^$" | head -n 1 | awk '{print $1}')
+        SELECTED_SPACE=$(cf spaces | awk 'NR>3 {print $1; exit}')
         
         if [ -z "$SELECTED_SPACE" ]; then
-          echo "错误: 未找到可用的空间"
+          echo "错误：在组织 '$SELECTED_ORG' 中未找到任何可用的空间。"
           exit 1
         fi
         
-        echo "选择空间: $SELECTED_SPACE"
+        echo "已自动选择空间: $SELECTED_SPACE"
         cf target -s "$SELECTED_SPACE"
         
-        # 显示当前目标信息
-        echo "当前部署目标:"
+        echo "----------------------------------------"
+        echo "当前部署目标确认:"
         cf target
+        echo "----------------------------------------"
         
-        # 将选择的组织和空间保存到环境变量中（用于后续步骤参考）
         echo "SELECTED_ORG=$SELECTED_ORG" >> $GITHUB_ENV
         echo "SELECTED_SPACE=$SELECTED_SPACE" >> $GITHUB_ENV
 
-    - name: Deploy application
+    - name: 部署应用
       run: |
         echo "开始部署应用: ${{ env.APP_NAME }}"
+        echo "使用镜像: ${{ env.DOCKER_IMAGE }}"
+        echo "目标区域: ${{ github.event.inputs.region }}"
         echo "目标组织: ${{ env.SELECTED_ORG }}"
         echo "目标空间: ${{ env.SELECTED_SPACE }}"
         
-        cf push ${{ env.APP_NAME }} --docker-image ${{ env.DOCKER_IMAGE }} -m ${{ env.MEMORY }} --health-check-type port
+        cf push ${{ env.APP_NAME }} --docker-image ${{ env.DOCKER_IMAGE }} -m ${{ env.MEMORY }} --health-check-type port --no-start
 
-    - name: Set environment variables
+    - name: 设置环境变量
       run: |
-        echo "设置环境变量..."
+        echo "为应用 ${{ env.APP_NAME }} 设置环境变量..."
         
-        # 基础环境变量
         cf set-env ${{ env.APP_NAME }} NAME "SAP"
         cf set-env ${{ env.APP_NAME }} UUID "${{ secrets.UUID }}"
         cf set-env ${{ env.APP_NAME }} NEZHA_SERVER "${{ secrets.NEZHA_SERVER }}"
-        cf set-env ${{ env.APP_NAME }} NEZHA_PORT "${{ secrets.NEZHA_PORT }}"
         cf set-env ${{ env.APP_NAME }} NEZHA_KEY "${{ secrets.NEZHA_KEY }}"
-        cf set-env ${{ env.APP_NAME }} ARGO_DOMAIN "${{ secrets.ARGO_DOMAIN }}"
-        cf set-env ${{ env.APP_NAME }} ARGO_AUTH "${{ secrets.ARGO_AUTH }}"
         cf set-env ${{ env.APP_NAME }} SUB_PATH "${{ secrets.SUB_PATH }}"
-        
-        # CFIP 使用默认值或 secret 值
-        CFIP_VALUE="${{ secrets.CFIP }}"
-        if [ -z "$CFIP_VALUE" ]; then
-          CFIP_VALUE="cf.090227.xyz"
-        fi
-        cf set-env ${{ env.APP_NAME }} CFIP "$CFIP_VALUE"
-        
         cf set-env ${{ env.APP_NAME }} CFPORT "${{ secrets.CFPORT }}"
         cf set-env ${{ env.APP_NAME }} CHAT_ID "${{ secrets.CHAT_ID }}"
         cf set-env ${{ env.APP_NAME }} BOT_TOKEN "${{ secrets.BOT_TOKEN }}"
-        
-        # 可选：从文件读取环境变量(如果存在)
-        if [ -f .env ]; then
-          echo "从 .env 文件读取额外环境变量..."
-          while IFS= read -r line; do
-            if [[ ! "$line" =~ ^# ]] && [[ -n "$line" ]]; then
-              IFS='=' read -r key value <<< "$line"
-              cf set-env ${{ env.APP_NAME }} "$key" "$value"
-              echo "  设置: $key"
-            fi
-          done < .env
+        cf set-env ${{ env.APP_NAME }} ARGO_PORT "${{ secrets.ARGO_PORT }}"
+
+        if echo "${{ secrets.ARGO_AUTH }}" | grep -q '\n'; then
+          echo "检测到组合格式的 ARGO_AUTH，将自动解析域名和Token..."
+          ARGO_DOMAIN_VALUE=$(echo "${{ secrets.ARGO_AUTH }}" | head -n 1)
+          ARGO_AUTH_VALUE=$(echo "${{ secrets.ARGO_AUTH }}" | tail -n +2)
+          cf set-env ${{ env.APP_NAME }} ARGO_DOMAIN "$ARGO_DOMAIN_VALUE"
+          cf set-env ${{ env.APP_NAME }} ARGO_AUTH "$ARGO_AUTH_VALUE"
+        else
+          echo "使用独立的 ARGO_DOMAIN 和 ARGO_AUTH secrets..."
+          cf set-env ${{ env.APP_NAME }} ARGO_DOMAIN "${{ secrets.ARGO_DOMAIN }}"
+          cf set-env ${{ env.APP_NAME }} ARGO_AUTH "${{ secrets.ARGO_AUTH }}"
         fi
 
-    - name: Restage application
-      run: |
-        echo "重新启动应用..."
-        cf restage ${{ env.APP_NAME }}
+        CFIP_VALUE="${{ secrets.CFIP }}"
+        if [ -z "$CFIP_VALUE" ]; then
+          CFIP_VALUE="cf.090227.xyz"
+          echo "未提供 CFIP，使用默认值: $CFIP_VALUE"
+        fi
+        cf set-env ${{ env.APP_NAME }} CFIP "$CFIP_VALUE"
+        
+        if [ "${{ github.event.inputs.is_direct_connect }}" = "true" ]; then
+          echo "已选择“直连镜像”模式，开始自动配置 DOMAIN 环境变量..."
+          ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
+          if [ -n "$ROUTE" ]; then
+            echo "已设置 DOMAIN 环境变量为: $ROUTE"
+            cf set-env ${{ env.APP_NAME }} DOMAIN "$ROUTE"
+          else
+            echo "警告：未找到应用路由，无法自动设置 DOMAIN, 请在部署成功后手动将节点配置里的address、host和sni改为应用域名"
+          fi
+        fi
+        
+        echo "环境变量设置完成。"
 
-    - name: Verify deployment
+    - name: 启动应用以应用环境变量
       run: |
-        echo "验证部署状态..."
+        echo "正在启动应用并应用所有环境变量..."
+        cf start ${{ env.APP_NAME }}
+
+    - name: 详细部署信息
+      run: |
+        echo "----------------------------------------"
+        echo "部署完成！正在验证应用状态..."
         cf app ${{ env.APP_NAME }}
         
-        # 获取应用URL
         APP_URL=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
         
-        echo "部署完成!"
-        echo "应用名称: ${{ env.APP_NAME }}"
-        echo "访问地址: https://$APP_URL"
-        echo "部署组织: ${{ env.SELECTED_ORG }}"
-        echo "部署空间: ${{ env.SELECTED_SPACE }}"
-        echo "部署区域: ${{ github.event.inputs.region }}"
+        echo "----------------------------------------"
+        echo "部署成功！详细信息如下："
+        echo "区域 (Region): ${{ github.event.inputs.region }}"
+        echo "组织 (ORG): ${{ env.SELECTED_ORG }}"
+        echo "空间 (SPACE): ${{ env.SELECTED_SPACE }}"
+        echo "应用名称 (App Name): ${{ env.APP_NAME }}"
+        
+        if [ -n "$APP_URL" ]; then
+          echo "应用 URL (APP_URL): https://$APP_URL"
+        else
+          echo "看到这里就证明出问题了。"
+        fi
+        echo "----------------------------------------"

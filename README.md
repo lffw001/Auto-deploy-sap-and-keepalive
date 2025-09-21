@@ -18,6 +18,7 @@
    - ~~`SG_ORG`: 新加坡组织名称~~（已自动获取）
    - ~~`US_ORG`: 美国组织名称~~（已自动获取）
    - ~~`SPACE`: Cloud Foundry空间名称~~（已自动获取）
+   - `部署的时候支持支持选择直连`: 打钩即可
 
 4. **设置Docker容器环境变量(也是在secrets里设置)**
    
@@ -33,11 +34,11 @@
    - `NEZHA_SERVER`：v1形式: nezha.xxx.com:8008  v0形式：nezha.xxx.com
    - `NEZHA_PORT`：V1哪吒没有这个
    - `NEZHA_KEY`：v1的NZ_CLIENT_SECRET或v0的agent密钥
-   - `CFIP`：优选域名或优选ip
-   - `CFPORT`：优选域名或优选ip对应端口
+   - `CFIP`：优选域名或优选ip 
+   - `CFPORT`：优选域名或优选ip对应端口 
    - `CHAT_ID`：Telegram聊天ID（可选）
    - `BOT_TOKEN`：Telegram机器人令牌（可选）
-
+  
 5. **开始部署**
    * 在GitHub仓库的Actions页面找到"自动部署SAP"工作流
    * 点击"Run workflow"按钮

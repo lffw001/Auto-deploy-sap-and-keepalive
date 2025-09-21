@@ -1,7 +1,7 @@
 name: 删除指定区域所有SAP应用
 
 on:
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
     inputs:
       region:
         description: '选择要删除应用的区域 (SG 或 US)'
@@ -9,30 +9,27 @@ on:
         default: 'SG'
         type: choice
         options:
-        - SG
-        - US
+          - SG
+          - US
       confirmation:
-        description: '请输入 "确认删除" 以确认操作'
+        description: '此操作不可逆！请输入 "确认删除" 来执行。'
         required: true
         type: string
 
 jobs:
   delete-apps:
     runs-on: ubuntu-latest
-    name: Delete Apps from ${{ github.event.inputs.region }}
+    name: 从区域 ${{ github.event.inputs.region }} 删除所有应用
     
     steps:
-    - name: 验证确认短语
+    - name: 验证操作确认
       run: |
         if [ "${{ github.event.inputs.confirmation }}" != "确认删除" ]; then
-          echo "错误：必须输入 '确认删除' 来确认操作"
+          echo "错误：输入不匹配 '确认删除'，操作已取消。"
           exit 1
         fi
 
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Install CF CLI
+    - name: 安装 CF CLI
       run: |
         wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
         echo "deb https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
@@ -49,197 +46,41 @@ jobs:
           echo "使用美国(US)区域"
         fi
 
-    - name: Login to Cloud Foundry and auto-detect org/space
+    - name: 登录并自动选择组织和空间
       run: |
-        # 首先进行基础登录
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
-        
-        echo "自动检测可用的组织和空间..."
-        
-        # 获取所有可用的组织
-        cf orgs > orgs.txt
-        echo "可用组织:"
-        cat orgs.txt
-        
-        # 自动选择第一个可用的组织（跳过标题行）
-        SELECTED_ORG=$(cf orgs | grep -v "^name$" | grep -v "^Getting orgs" | grep -v "^$" | head -n 1 | awk '{print $1}')
-        
-        if [ -z "$SELECTED_ORG" ]; then
-          echo "错误: 未找到可用的组织"
-          exit 1
-        fi
-        
-        echo "选择组织: $SELECTED_ORG"
+        SELECTED_ORG=$(cf orgs | awk 'NR>3 {print $1; exit}')
+        if [ -z "$SELECTED_ORG" ]; then echo "错误：未找到可用组织"; exit 1; fi
         cf target -o "$SELECTED_ORG"
-        
-        # 获取该组织下的所有空间
-        cf spaces > spaces.txt
-        echo "可用空间:"
-        cat spaces.txt
-        
-        # 自动选择第一个可用的空间
-        SELECTED_SPACE=$(cf spaces | grep -v "^name$" | grep -v "^Getting spaces" | grep -v "^$" | head -n 1 | awk '{print $1}')
-        
-        if [ -z "$SELECTED_SPACE" ]; then
-          echo "错误: 未找到可用的空间"
-          exit 1
-        fi
-        
-        echo "选择空间: $SELECTED_SPACE"
+        SELECTED_SPACE=$(cf spaces | awk 'NR>3 {print $1; exit}')
+        if [ -z "$SELECTED_SPACE" ]; then echo "错误：未找到可用空间"; exit 1; fi
         cf target -s "$SELECTED_SPACE"
-        
-        # 显示当前目标信息
-        echo "当前删除目标:"
-        cf target
-        
-        # 将选择的组织和空间保存到环境变量中（用于后续步骤参考）
-        echo "SELECTED_ORG=$SELECTED_ORG" >> $GITHUB_ENV
-        echo "SELECTED_SPACE=$SELECTED_SPACE" >> $GITHUB_ENV
+        echo "将从 组织: $SELECTED_ORG / 空间: $SELECTED_SPACE 中删除应用"
 
-    - name: 获取所有应用
-      id: get-apps
+    - name: 获取并删除所有应用
       run: |
-        echo "扫描区域 ${{ github.event.inputs.region }} 中的所有应用..."
-        echo "目标组织: ${{ env.SELECTED_ORG }}"
-        echo "目标空间: ${{ env.SELECTED_SPACE }}"
+        # 这里是修正后的关键部分，确保 awk 语句有完整的单引号
+        apps=$(cf apps | awk 'NR>3 {print $1}')
         
-        # 获取所有应用名称，使用 || true 防止命令失败
-        apps=$(cf apps 2>/dev/null | awk 'NR>3 {print $1}' | grep -v '^
-
-    - name: 删除所有应用
-      if: steps.get-apps.outputs.has_apps == 'true'
-      run: |
-        # 从上一步获取应用列表
-        apps="${{ steps.get-apps.outputs.apps }}"
-        
-        echo "警告: 即将删除区域 ${{ github.event.inputs.region }} 中的所有应用"
-        echo "目标组织: ${{ env.SELECTED_ORG }}"
-        echo "目标空间: ${{ env.SELECTED_SPACE }}"
-        echo "应用列表:"
-        echo "$apps"
-        echo "----------------------------------------"
-        
-        # 删除每个应用
-        success_count=0
-        failure_count=0
-        
-        for app in $apps; do
-          echo "正在删除应用: $app"
-          
-          if cf delete -f -r "$app"; then  # -f 强制删除，不需要确认；-r 同时删除关联的路由
-            echo "应用 $app 删除成功"
-            success_count=$((success_count + 1))
-          else
-            echo "应用 $app 删除失败"
-            failure_count=$((failure_count + 1))
-          fi
-          
-          echo "----------------------------------------"
-          sleep 5  # 每个应用之间等待 5 秒
-        done
-        
-        echo "删除操作完成"
-        echo "成功删除: $success_count 个应用"
-        echo "删除失败: $failure_count 个应用"
-
-    - name: 验证应用已删除
-      run: |
-        echo "验证删除结果..."
-        echo "区域 ${{ github.event.inputs.region }} 中剩余的应用:"
-        echo "组织: ${{ env.SELECTED_ORG }}"
-        echo "空间: ${{ env.SELECTED_SPACE }}"
-        echo "----------------------------------------"
-        
-        # 使用 || true 防止 cf apps 在没有应用时返回非零退出码
-        cf apps || true
-        
-        # 检查是否还有剩余应用，忽略命令的退出状态
-        remaining_apps=$(cf apps 2>/dev/null | awk 'NR>3 {print $1}' | grep -v '^ || true)
-        
-        if [ -z "$remaining_apps" ]; then
-          echo "确认: 区域 ${{ github.event.inputs.region }} 中所有应用已成功删除"
-        else
-          echo "警告: 区域 ${{ github.event.inputs.region }} 中仍有以下应用未删除:"
-          echo "$remaining_apps"
-        fi || true)
-        
-        echo "发现的应用:"
         if [ -z "$apps" ]; then
-          echo "(无应用)"
-        else
-          echo "$apps"
-        fi
-        
-        # 检查是否有应用
-        if [ -z "$apps" ]; then
-          echo "在区域 ${{ github.event.inputs.region }} 中未找到任何应用"
-          echo "has_apps=false" >> $GITHUB_OUTPUT
+          echo "在区域 ${{ github.event.inputs.region }} 中未找到任何应用，无需删除。"
           exit 0
-        else
-          echo "has_apps=true" >> $GITHUB_OUTPUT
-          # 统计应用数量
-          app_count=$(echo "$apps" | wc -l)
-          echo "总共发现 $app_count 个应用"
         fi
         
-        # 直接输出到 GITHUB_OUTPUT（多行字符串）
-        echo "apps<<EOF" >> $GITHUB_OUTPUT
-        echo "$apps" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
-    - name: 删除所有应用
-      if: steps.get-apps.outputs.has_apps == 'true'
-      run: |
-        # 从上一步获取应用列表
-        apps="${{ steps.get-apps.outputs.apps }}"
-        
-        echo "警告: 即将删除区域 ${{ github.event.inputs.region }} 中的所有应用"
-        echo "目标组织: ${{ env.SELECTED_ORG }}"
-        echo "目标空间: ${{ env.SELECTED_SPACE }}"
-        echo "应用列表:"
+        echo "发现以下应用，将全部删除:"
         echo "$apps"
-        echo "----------------------------------------"
         
-        # 删除每个应用
-        success_count=0
-        failure_count=0
-        
+        # 循环删除每个应用
         for app in $apps; do
-          echo "正在删除应用: $app"
-          
-          if cf delete -f -r "$app"; then  # -f 强制删除，不需要确认；-r 同时删除关联的路由
-            echo "应用 $app 删除成功"
-            success_count=$((success_count + 1))
-          else
-            echo "应用 $app 删除失败"
-            failure_count=$((failure_count + 1))
-          fi
-          
           echo "----------------------------------------"
-          sleep 5  # 每个应用之间等待 5 秒
+          echo "正在删除应用: $app"
+          # 使用 -f 强制删除，-r 同时删除关联的路由
+          cf delete -f -r "$app"
+          echo "应用 $app 删除成功。"
         done
-        
-        echo "删除操作完成"
-        echo "成功删除: $success_count 个应用"
-        echo "删除失败: $failure_count 个应用"
 
-    - name: 验证应用已删除
+    - name: 最终验证
       run: |
-        echo "验证删除结果..."
-        echo "区域 ${{ github.event.inputs.region }} 中剩余的应用:"
-        echo "组织: ${{ env.SELECTED_ORG }}"
-        echo "空间: ${{ env.SELECTED_SPACE }}"
         echo "----------------------------------------"
-        
-        # 使用 || true 防止 cf apps 在没有应用时返回非零退出码
-        cf apps || true
-        
-        # 检查是否还有剩余应用，忽略命令的退出状态
-        remaining_apps=$(cf apps 2>/dev/null | awk 'NR>3 {print $1}' | grep -v '^ || true)
-        
-        if [ -z "$remaining_apps" ]; then
-          echo "确认: 区域 ${{ github.event.inputs.region }} 中所有应用已成功删除"
-        else
-          echo "警告: 区域 ${{ github.event.inputs.region }} 中仍有以下应用未删除:"
-          echo "$remaining_apps"
-        fi
+        echo "删除操作完成。验证区域 ${{ github.event.inputs.region }} 中剩余的应用:"
+        cf apps
