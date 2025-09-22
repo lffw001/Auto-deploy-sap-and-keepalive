@@ -1,5 +1,4 @@
-# Auto-SAP应用部署说明文档
-
+# 部署失败不要慌早上8点在部署
 ### 前置要求
 * GitHub 账户：需要有一个 GitHub 账户来创建仓库和设置工作流
 * SAP Cloud Foundry 账户：需要有 SAP Cloud Foundry 的有效账户，点此注册：https://www.sap.com
@@ -77,34 +76,11 @@
 
 ### GitHub Actions自动保活（推荐）
 * 本仓库包含"自动保活SAP"工作流，会自动重启所有区域的应用
-* 默认每天23:58执行（可在工作流文件中调整cron时间）
+* 默认每天tuc 23:00执行（可在工作流文件中调整cron时间）
 * 工作流会自动检测所有区域的组织和空间
 * 并行处理SG和US区域的应用重启
 * actions保活可能存在时间误差，建议根据前两天的情况进行适当调整cron时间
 
-### VPS或NAT小鸡保活
-推荐使用keep.sh在vps或nat小鸡上精准保活：
-
-1. 下载文件到vps或本地
-```bash
-wget https://raw.githubusercontent.com/eooce/Auto-deploy-sap-and-keepalive/refs/heads/main/keep.sh && chmod +x keep.sh
-```
-
-2. 修改keep.sh开头4-11行中的变量和保活url
-
-3. 运行保活脚本
-```bash
-bash keep.sh
-```
-
-### Cloudflare Workers保活
-1. 登录你的Cloudflare账户 [Cloudflare Dashboard](https://dash.cloudflare.com)
-2. 点击 `Workers and pages`创建一个workers，编辑代码
-3. 全选`_worker-keep.js`文件里的代码粘贴到workers中
-4. 在开头添加登录email和登录密码（telegram通知配置可选）、项目URL和项目名称
-5. 右上角点击部署
-6. 部署成功后返回到该worker设置中选择添加触发事件
-7. 添加cron触发器，cron表达式设置为：`*/2 0 * * *`（北京时间早上8-9点每2分钟检查一次）
 
 ## 新版本优势
 
